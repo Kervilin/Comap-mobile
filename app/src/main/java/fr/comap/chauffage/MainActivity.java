@@ -301,6 +301,8 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (form.getVisibility() == View.VISIBLE && pageLoaded) {
             closeForm();
+        } else if (web.getVisibility() == View.VISIBLE && web.canGoBack()) {
+            web.goBack();   // ferme la fenêtre « Modif T° » si elle est ouverte
         } else {
             super.onBackPressed();
         }
