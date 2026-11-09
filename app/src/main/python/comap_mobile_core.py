@@ -5,10 +5,13 @@ Interroge Comap Smart Home (ex-Qivivo) et Open-Meteo, et sert la page (valeurs a
 Aucun fichier n'est lu ni écrit : tout reste en mémoire. Les réglages (identifiants...) sont passés
 par l'application Android via des variables d'environnement (voir comap_android.py).
 
-Lecture seule : ne modifie aucun réglage de chauffage. Programme non officiel.
+Les mesures sont lues seulement ; la seule écriture est la fonction « Modif T° », qui envoie (ou annule)
+une consigne TEMPORAIRE au thermostat. Programme non officiel.
 """
+import hmac
 import json
 import os
+import secrets
 import threading
 import urllib.parse
 import urllib.request
@@ -53,6 +56,11 @@ try:
     LON = float(os.environ.get("COMAP_LON", "-3.5486").replace(",", "."))
 except ValueError:
     LAT, LON = 47.8736, -3.5486
+# « Modif T° » : limites de la consigne temporaire (comme l'application Comap) et jeton qui protège l'envoi.
+TEMP_MIN, TEMP_MAX = 15.0, 21.0
+MAX_MINUTES = 12 * 60
+SECONDS_PER_MINUTE = 60  # la durée de la consigne temporaire est transmise à Comap en secondes
+TOKEN = secrets.token_urlsafe(18)
 REFRESH = max(20, int(os.environ.get("COMAP_REFRESH", "60")))  # secondes entre deux actualisations de la page
 
 for var in ("COMAP_SMART_HOME_USERNAME", "COMAP_SMART_HOME_PASSWORD"):
@@ -136,7 +144,7 @@ def _fetch(hours, measures=None, start=None, end=None):
                 raise
 
 
-_live = {"t": 0.0, "value": None, "housing": None}
+_live = {"t": 0.0, "value": None, "housing": None, "zone_id": None}
 LIVE_SECONDS = 20
 
 
@@ -158,6 +166,7 @@ def get_live():
         zones = details.get("zones", []) if isinstance(details, dict) else []
         zone = next((z for z in zones if ZONE_ID and z.get("id") == ZONE_ID), None) or (zones[0] if zones else None)
         if zone:
+            _live["zone_id"] = zone.get("id")
             sp = zone.get("set_point")
             _live["value"] = {
                 "zone": zone.get("title"),
@@ -178,6 +187,57 @@ def get_live():
             _last_auth_error = text
             raise AuthBlocked("Comap a refusé la connexion : " + text)
     return _live["value"]
+
+
+def _comap_call(fn, *args):
+    """Appelle Comap et joint la réponse du serveur au message en cas d'échec."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        resp = getattr(exc, "response", None)
+        detail = ""
+        if resp is not None and getattr(resp, "text", ""):
+            detail = " — " + resp.text[:200]
+        raise RuntimeError(f"{exc}{detail}")
+
+
+def _control_context():
+    """Authentification, logement et zone du thermostat, nécessaires pour le piloter."""
+    if time.time() < _blocked_until:
+        raise AuthBlocked("Connexion suspendue après un refus de Comap : " + _last_auth_error)
+    _live["t"] = 0.0
+    get_live()
+    if not _live.get("housing") or not _live.get("zone_id"):
+        raise RuntimeError("Thermostat introuvable chez Comap (logement ou zone).")
+    return _get_auth(), _live["housing"], _live["zone_id"]
+
+
+def set_temporary(temp, minutes):
+    """Consigne temporaire : température affichée (avec correction) et durée en minutes."""
+    temp = float(temp)
+    minutes = int(minutes)
+    if not (TEMP_MIN <= temp <= TEMP_MAX):
+        raise ValueError(f"Température hors limites ({TEMP_MIN:g} à {TEMP_MAX:g} °C).")
+    if not (1 <= minutes <= MAX_MINUTES):
+        raise ValueError("Durée hors limites (1 minute à 12 heures).")
+    # la consigne affichée = valeur de Comap + correction : on retire la correction avant l'envoi
+    sent = round((temp - SETPOINT_OFFSET) * 2) / 2
+    with _lock:
+        auth, housing, zone = _control_context()
+        _comap_call(ThermalService(auth).set_temporary_instruction, housing, zone, minutes * SECONDS_PER_MINUTE, sent)
+        _cache.clear()
+        _live["t"] = 0.0
+    return {"sent": sent, "minutes": minutes}
+
+
+def cancel_temporary():
+    """Supprime la consigne temporaire : Comap reprend sa consigne normale."""
+    with _lock:
+        auth, housing, zone = _control_context()
+        _comap_call(ThermalService(auth).cancel_temporary_instruction, housing, zone)
+        _cache.clear()
+        _live["t"] = 0.0
+    return {}
 
 
 _page_error = {"msg": ""}
@@ -341,7 +401,8 @@ PAGE = """<!doctype html>
                overscroll-behavior: none; -webkit-user-select: none; user-select: none;
                -webkit-touch-callout: none; }
   body { font: 15px/1.4 Roboto, system-ui, "Segoe UI", sans-serif; }
-  #app { display: flex; flex-direction: column; gap: 12px; padding: 12px; max-width: 900px; margin: 0 auto; }
+  #app { display: flex; flex-direction: column; gap: 12px; padding: 12px; max-width: 900px; margin: 0 auto;
+         min-height: 100vh; min-height: 100dvh; }
   .card { background: var(--panel); border-radius: 18px; box-shadow: var(--shadow); padding: 14px 16px; }
 
   /* ---- valeurs actuelles ---- */
@@ -367,7 +428,7 @@ PAGE = """<!doctype html>
   .stat .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ---- graphique ---- */
-  .chartcard { display: flex; flex-direction: column; padding: 12px; }
+  .chartcard { display: flex; flex-direction: column; padding: 12px; flex: 1 1 auto; }
   .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
   .seg { display: flex; background: var(--chip); border-radius: 12px; padding: 3px; gap: 2px; flex: 1; }
   .seg button { flex: 1; }
@@ -389,7 +450,7 @@ PAGE = """<!doctype html>
   .sw.curve-in { border-color: var(--hot); } .sw.curve-out { border-color: var(--cool); } .sw.curve-sp { border-color: var(--accent); }
   .tip .soft { color: var(--muted); }
   .tip .hot { color: var(--hot); font-weight: 600; }
-  .chartwrap { position: relative; height: clamp(220px, 36vh, 380px); }
+  .chartwrap { position: relative; flex: 1 1 auto; min-height: 260px; }
   #chart { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: pan-y; }
   svg text { fill: var(--muted); font-size: 11px; }
   svg text.wxicon { font-size: 16px; fill: initial; }
@@ -412,6 +473,34 @@ PAGE = """<!doctype html>
   .rainbar { fill: var(--cool); opacity: .55; }
   .legend { color: var(--muted); font-size: .72rem; margin: 8px 0 0; }
 
+  /* ---- fenêtre « Modif T° » ---- */
+  .modbtn { margin-top: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 8px 16px; border-radius: 999px; }
+  .modal { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; }
+  .modal[hidden] { display: none; }
+  .sheet { background: var(--panel); width: 100%; max-width: 560px; max-height: 100%; overflow-y: auto;
+           border-radius: 22px 22px 0 0; padding: 16px 18px 20px; box-shadow: 0 -4px 24px rgba(0,0,0,.25); }
+  .mhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .mhead h2 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  .msub { color: var(--muted); font-size: .82rem; margin: 4px 0 6px; }
+  .field { padding: 10px 0; border-top: 1px solid var(--line); }
+  .flabel { font-weight: 600; margin-bottom: 8px; }
+  .stepper { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .stepbtn { width: 48px; height: 48px; padding: 0; border-radius: 12px; background: var(--chip); font-size: 1.6rem; line-height: 1; }
+  .stepbtn:disabled { opacity: .35; }
+  .sval { min-width: 76px; height: 48px; display: grid; place-items: center; background: var(--chip); border-radius: 12px; font-size: 1.35rem; font-weight: 500; }
+  .unit { color: var(--muted); min-width: 1ch; }
+  .hint { color: var(--muted); font-size: .75rem; margin-top: 6px; }
+  .summary { font-weight: 600; margin: 10px 0 12px; line-height: 1.35; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 12px 20px; border-radius: 12px; }
+  .ghost { background: var(--chip); padding: 12px 16px; border-radius: 12px; }
+  .primary:disabled, .ghost:disabled { opacity: .5; }
+  .msg { min-height: 1.3em; margin: 10px 0 0; font-size: .85rem; color: var(--muted); }
+  .msg.err { color: var(--warn); font-weight: 600; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--bg);
+           padding: 10px 18px; border-radius: 999px; font-size: .85rem; max-width: 90%; text-align: center; }
+  .toast:empty { display: none; }
+
   /* ---- pied de page ---- */
   footer { color: var(--muted); font-size: .72rem; padding: 0 6px 8px; }
   footer a { color: inherit; }
@@ -420,25 +509,39 @@ PAGE = """<!doctype html>
   #status.err { display: block; background: var(--warn); color: #fff; padding: 8px 12px; border-radius: 12px;
                 margin-bottom: 6px; font-size: .8rem; }
 
-  /* ---- paysage : valeurs à gauche, graphique pleine hauteur à droite ---- */
+  /* ---- paysage : valeurs à gauche (étroit), graphique pleine hauteur à droite ---- */
   @media (orientation: landscape) and (max-height: 560px) {
     html, body { height: 100%; overflow: hidden; }
-    #app { display: grid; grid-template-columns: minmax(210px, 30%) 1fr; grid-template-rows: 1fr auto;
-           grid-template-areas: "side chart" "foot chart"; height: 100vh; max-width: none; gap: 8px 10px; padding: 8px 10px; }
-    #side { grid-area: side; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+    #app { display: grid; grid-template-columns: clamp(158px, 21%, 210px) 1fr; grid-template-rows: 1fr auto;
+           grid-template-areas: "side chart" "foot chart"; height: 100vh; min-height: 0; max-width: none; gap: 6px 8px; padding: 8px 10px; }
+    #side { grid-area: side; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
     .chartcard { grid-area: chart; min-height: 0; }
     footer { grid-area: foot; padding: 0 4px; overflow: hidden; max-height: 5.5em; }
-    .chartwrap { flex: 1; height: auto; min-height: 0; }
-    .big { font-size: 2.6rem; }
-    .stats { grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-    .stat { padding: 6px 8px; }
-    .stat .v { font-size: 1rem; }
+    .chartwrap { min-height: 0; }
+    .card { padding: 8px 10px; border-radius: 14px; }
+    .hero { flex-direction: column; gap: 4px; }
+    .lab { font-size: .7rem; }
+    .big { font-size: 2.5rem; }
+    .big small { font-size: 1rem; }
+    .sub { font-size: .7rem; }
+    .heroside { flex-direction: row; align-items: center; justify-content: space-between; width: 100%; gap: 6px; }
+    .iconbtn { width: 34px; height: 34px; }
+    .iconbtn svg { width: 18px; height: 18px; }
+    .chip { padding: 4px 9px; font-size: .78rem; }
+    #heatSub { display: none; }
+    .modbtn { width: 100%; margin-top: 6px; padding: 7px 10px; }
+    .stats { grid-template-columns: 1fr; gap: 6px; }
+    .stat { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; }
+    .stat .v { font-size: 1rem; margin-top: 0; }
     .stat .sub { display: none; }
-    .card { padding: 10px 12px; border-radius: 14px; }
     .tip { height: 2.7em; }
-    .legend { display: none; }
     .seg button { padding: 6px 4px; }
     .pill { padding: 7px 12px; }
+    .modal { align-items: center; }
+    .sheet { max-width: 880px; border-radius: 22px; padding: 12px 18px 14px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
+    .cols .field:first-child { border-top: 0; }
+    .summary { margin-top: 4px; }
   }
 </style>
 </head>
@@ -450,6 +553,7 @@ PAGE = """<!doctype html>
         <div class="lab">Température intérieure</div>
         <div class="big"><span id="tIn">–</span><small>°C</small></div>
         <div class="sub" id="tInSub">&nbsp;</div>
+        <button class="modbtn" id="modbtn">Modif T°</button>
       </div>
       <div class="heroside">
         <div class="icons">
@@ -490,6 +594,48 @@ PAGE = """<!doctype html>
     <span id="foot"></span>
   </footer>
 </div>
+
+<div class="modal" id="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modTitle">
+    <div class="mhead"><h2 id="modTitle">Modifier la température</h2><button class="pill" id="modClose">Fermer</button></div>
+    <div class="msub" id="modCur"></div>
+    <div class="cols">
+      <div class="col">
+        <div class="field">
+          <div class="flabel">Température de consigne</div>
+          <div class="stepper">
+            <button class="stepbtn" id="tMinus" aria-label="Diminuer la température">−</button>
+            <div class="sval" id="tVal">19,0</div>
+            <button class="stepbtn" id="tPlus" aria-label="Augmenter la température">+</button>
+            <span class="unit">°C</span>
+          </div>
+          <div class="hint">De 15,0 à 21,0 °C, par pas de 0,5 °C</div>
+        </div>
+        <div class="field">
+          <div class="flabel">Durée</div>
+          <div class="stepper">
+            <button class="stepbtn" id="dMinus" aria-label="Diminuer la durée">−</button>
+            <div class="sval" id="dVal">1</div>
+            <button class="stepbtn" id="dPlus" aria-label="Augmenter la durée">+</button>
+            <span class="unit" id="dUnit">h</span>
+            <button class="pill" id="until" aria-pressed="false">Jusqu'à 22h30</button>
+          </div>
+          <div class="hint">De 1 à 12 h, par pas d'1 h</div>
+        </div>
+      </div>
+      <div class="col">
+        <p class="summary" id="modSum"></p>
+        <div class="actions">
+          <button class="primary" id="modOk">Valider</button>
+          <button class="ghost" id="modCancelTemp">Annuler la modif</button>
+        </div>
+        <p class="msg" id="modMsg" role="status"></p>
+        <p class="hint">« Valider » envoie réellement la consigne à votre thermostat. « Annuler la modif » supprime la consigne temporaire : Comap reprend sa consigne normale (programme en cours).</p>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
 
 <script>
 const LABELS = { inside_temperature: "Température intérieure", inside_humidity: "Humidité intérieure",
@@ -657,6 +803,8 @@ function renderNow(measures, pts, heat, battery, live) {
   if (typeof liveSp === "number") { spText = fmtVal("temperature_instruction", liveSp); spSub = "en ce moment"; }
   else if (spLast) { spText = fmtVal("temperature_instruction", spLast.temperature_instruction); spSub = liveSp != null ? modeName(liveSp) : "mesure de " + fmtHM(spLast.time); }
   else if (liveSp != null) { spText = modeName(liveSp); }
+  window.SP_NOW = typeof liveSp === "number" ? liveSp : spLast ? spLast.temperature_instruction : null;
+  window.SP_TEXT = spText + (typeof liveSp === "string" ? " (" + modeName(liveSp) + ")" : "");
   $("sp").textContent = spText;
   $("spSub").textContent = spSub;
 
@@ -1010,12 +1158,115 @@ $("setbtn").addEventListener("click", () => { if (window.Android) window.Android
 // tirer vers le bas depuis le haut de la page : actualisation
 let ptrY = null;
 document.addEventListener("touchstart", (e) => {
-  ptrY = (window.scrollY === 0 && !e.target.closest(".chartwrap")) ? e.touches[0].clientY : null;
+  ptrY = (window.scrollY === 0 && !e.target.closest(".chartwrap") && $("modal").hidden) ? e.touches[0].clientY : null;
 }, { passive: true });
 document.addEventListener("touchend", (e) => {
   if (ptrY !== null && e.changedTouches[0].clientY - ptrY > 110) loop();
   ptrY = null;
 }, { passive: true });
+
+// ---- Modif T° : consigne temporaire envoyée au thermostat ----
+const TOKEN = "__TOKEN__";
+const MOD = { temp: 19, hours: 1, until: false };
+const T_MIN = 15, T_MAX = 21, H_MIN = 1, H_MAX = 12, UNTIL_HM = [22, 30];
+const pad2 = (n) => String(n).padStart(2, "0");
+function untilTarget() {
+  const n = new Date(), t = new Date(n);
+  t.setHours(UNTIL_HM[0], UNTIL_HM[1], 0, 0);
+  if (t.getTime() <= n.getTime()) t.setDate(t.getDate() + 1);
+  return t;
+}
+const untilMinutes = () => Math.ceil((untilTarget().getTime() - Date.now()) / 60000);
+const modMinutes = () => (MOD.until ? untilMinutes() : MOD.hours * 60);
+const hm = (m) => Math.floor(m / 60) + " h " + pad2(m % 60);
+const untilLabel = pad2(UNTIL_HM[0]) + ":" + pad2(UNTIL_HM[1]);
+
+function renderModal() {
+  const um = untilMinutes();
+  const untilOk = um >= 5 && um <= H_MAX * 60;
+  if (MOD.until && !untilOk) MOD.until = false;
+  $("until").disabled = !untilOk;
+  $("until").setAttribute("aria-pressed", String(MOD.until));
+  $("tVal").textContent = num(MOD.temp);
+  $("tMinus").disabled = MOD.temp <= T_MIN;
+  $("tPlus").disabled = MOD.temp >= T_MAX;
+  $("dVal").textContent = MOD.until ? untilLabel : String(MOD.hours);
+  $("dUnit").textContent = MOD.until ? "" : "h";
+  $("dMinus").disabled = !MOD.until && MOD.hours <= H_MIN;
+  $("dPlus").disabled = !MOD.until && MOD.hours >= H_MAX;
+  const mins = modMinutes();
+  const dur = MOD.until
+    ? "jusqu'à " + untilLabel + " (dans " + hm(mins) + ")"
+    : "pendant " + MOD.hours + " h (jusqu'à " + fmtHM(Date.now() + mins * 60000) + " environ)";
+  let txt = "Nouvelle consigne : " + num(MOD.temp) + " °C " + dur + ", puis retour au fonctionnement normal.";
+  const off = window.SP_OFFSET || 0;
+  if (off) txt += " Comap recevra " + num(Math.round((MOD.temp - off) * 2) / 2) + " °C (consigne affichée moins la correction de " + signed(off) + " °C).";
+  $("modSum").textContent = txt;
+}
+function openModal() {
+  const cur = window.SP_NOW;
+  MOD.temp = typeof cur === "number" ? Math.min(T_MAX, Math.max(T_MIN, Math.round(cur * 2) / 2)) : 19;
+  MOD.hours = 1;
+  MOD.until = false;
+  $("modCur").textContent = "Consigne actuelle : " + (window.SP_TEXT || "–");
+  $("modMsg").textContent = "";
+  $("modMsg").className = "msg";
+  $("modOk").disabled = false;
+  $("modCancelTemp").disabled = false;
+  renderModal();
+  $("modal").hidden = false;
+  history.pushState({ modal: 1 }, "");   // la touche retour du téléphone ferme la fenêtre
+}
+function closeModal() {
+  if (!$("modal").hidden && history.state && history.state.modal) history.back();
+  else $("modal").hidden = true;
+}
+window.addEventListener("popstate", () => { $("modal").hidden = true; });
+let toastTimer = null;
+function toast(text) {
+  $("toast").textContent = text;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("toast").textContent = ""; }, 4500);
+}
+async function modSend(path, body, okText) {
+  const msg = $("modMsg");
+  $("modOk").disabled = true;
+  $("modCancelTemp").disabled = true;
+  msg.className = "msg";
+  msg.textContent = "Envoi à Comap…";
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN }, body: JSON.stringify(body || {}) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("erreur " + r.status));
+    closeModal();
+    toast(okText);
+    setTimeout(loop, 1500);
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = "Échec : " + e.message;
+    $("modOk").disabled = false;
+    $("modCancelTemp").disabled = false;
+  }
+}
+$("modbtn").addEventListener("click", openModal);
+$("modClose").addEventListener("click", closeModal);
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
+$("tMinus").addEventListener("click", () => { MOD.temp = Math.max(T_MIN, MOD.temp - 0.5); renderModal(); });
+$("tPlus").addEventListener("click", () => { MOD.temp = Math.min(T_MAX, MOD.temp + 0.5); renderModal(); });
+function stepHours(delta) {
+  if (MOD.until) { MOD.hours = Math.min(H_MAX, Math.max(H_MIN, Math.round(untilMinutes() / 60))); MOD.until = false; }
+  MOD.hours = Math.min(H_MAX, Math.max(H_MIN, MOD.hours + delta));
+  renderModal();
+}
+$("dMinus").addEventListener("click", () => stepHours(-1));
+$("dPlus").addEventListener("click", () => stepHours(1));
+$("until").addEventListener("click", () => { MOD.until = !MOD.until; renderModal(); });
+$("modOk").addEventListener("click", () => {
+  const minutes = modMinutes();
+  const txt = "Consigne temporaire envoyée : " + num(MOD.temp) + " °C " + (MOD.until ? "jusqu'à " + untilLabel : "pendant " + MOD.hours + " h");
+  modSend("/api/temporary", { temp: MOD.temp, minutes }, txt);
+});
+$("modCancelTemp").addEventListener("click", () => modSend("/api/temporary/cancel", {}, "Consigne temporaire annulée : retour au programme"));
 
 let timer = null;
 async function loop() {
@@ -1053,7 +1304,7 @@ class Handler(BaseHTTPRequestHandler):
     def _do_get(self):
         url = urlparse(self.path)
         if url.path == "/":
-            self._send(200, PAGE, "text/html; charset=utf-8")
+            self._send(200, PAGE.replace("__TOKEN__", TOKEN), "text/html; charset=utf-8")
         elif url.path == "/api/data":
             try:
                 hours = int(parse_qs(url.query).get("hours", ["24"])[0])
@@ -1069,6 +1320,43 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, json.dumps({"error": str(exc)}), "application/json")
         else:
             self._send(404, "Introuvable", "text/plain; charset=utf-8")
+
+    def do_POST(self):
+        try:
+            self._do_post()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass
+
+    def _do_post(self):
+        url = urlparse(self.path)
+        port = self.server.server_address[1]
+        origin = self.headers.get("Origin")
+        host_ok = self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}")
+        origin_ok = origin is None or origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+        token_ok = hmac.compare_digest(self.headers.get("X-Token", ""), TOKEN)
+        if not (host_ok and origin_ok and token_ok):
+            self._send(403, json.dumps({"error": "Accès refusé."}), "application/json")
+            return
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            self._send(400, json.dumps({"error": "Requête illisible."}), "application/json")
+            return
+        try:
+            if url.path == "/api/temporary":
+                result = set_temporary(body.get("temp"), body.get("minutes"))
+            elif url.path == "/api/temporary/cancel":
+                result = cancel_temporary()
+            else:
+                self._send(404, json.dumps({"error": "Introuvable."}), "application/json")
+                return
+            print("[Comap] Consigne temporaire : " + url.path.rsplit("/", 1)[-1], flush=True)
+            self._send(200, json.dumps(dict(result, ok=True)), "application/json")
+        except (ValueError, TypeError) as exc:
+            self._send(400, json.dumps({"error": str(exc)}), "application/json")
+        except Exception as exc:
+            self._send(502, json.dumps({"error": str(exc)}), "application/json")
 
     def log_message(self, fmt, *args):
         pass  # sortie console silencieuse
