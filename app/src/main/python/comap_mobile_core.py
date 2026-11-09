@@ -59,7 +59,7 @@ except ValueError:
 # « Modif T° » : limites de la consigne temporaire (comme l'application Comap) et jeton qui protège l'envoi.
 TEMP_MIN, TEMP_MAX = 15.0, 21.0
 MAX_MINUTES = 12 * 60
-SECONDS_PER_MINUTE = 60  # la durée de la consigne temporaire est transmise à Comap en secondes
+DURATION_UNIT_MINUTES = 1  # unité de la durée chez Comap : 1 = minutes (60 = heures)
 TOKEN = secrets.token_urlsafe(18)
 REFRESH = max(20, int(os.environ.get("COMAP_REFRESH", "60")))  # secondes entre deux actualisations de la page
 
@@ -212,6 +212,44 @@ def _control_context():
     return _get_auth(), _live["housing"], _live["zone_id"]
 
 
+def _find_end(obj, found):
+    """Cherche dans la réponse de Comap une date de fin (clé contenant end / until / expir)."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str) and any(w in key.lower() for w in ("end", "until", "expir")):
+                try:
+                    found.append(datetime.fromisoformat(value.replace("Z", "+00:00")))
+                except ValueError:
+                    pass
+            else:
+                _find_end(value, found)
+    elif isinstance(obj, list):
+        for value in obj:
+            _find_end(value, found)
+
+
+def _check_end(auth, housing, zone, minutes):
+    """Relit la zone après l'envoi : si Comap indique une heure de fin, la compare à celle demandée."""
+    try:
+        time.sleep(1.0)
+        details = ThermalService(auth).get_zone_thermal_details(housing, zone)
+        found = []
+        _find_end(details, found)
+        now = datetime.now().astimezone()
+        expected = now + timedelta(minutes=minutes)
+        future = [d for d in found if d.tzinfo and d > now]
+        if not future:
+            return None, None
+        real = min(future, key=lambda d: abs((d - expected).total_seconds()))
+        end = real.astimezone().strftime("%H:%M")
+        if abs((real - expected).total_seconds()) > 600:
+            return end, (f"Attention : Comap indique une fin à {end} au lieu de {expected.strftime('%H:%M')}. "
+                         "Vérifiez dans l'appli Comap ou annulez la modif.")
+        return end, None
+    except Exception:
+        return None, None
+
+
 def set_temporary(temp, minutes):
     """Consigne temporaire : température affichée (avec correction) et durée en minutes."""
     temp = float(temp)
@@ -224,10 +262,12 @@ def set_temporary(temp, minutes):
     sent = round((temp - SETPOINT_OFFSET) * 2) / 2
     with _lock:
         auth, housing, zone = _control_context()
-        _comap_call(ThermalService(auth).set_temporary_instruction, housing, zone, minutes * SECONDS_PER_MINUTE, sent)
+        duration = max(1, -(-minutes // DURATION_UNIT_MINUTES))
+        _comap_call(ThermalService(auth).set_temporary_instruction, housing, zone, duration, sent)
         _cache.clear()
         _live["t"] = 0.0
-    return {"sent": sent, "minutes": minutes}
+        end, warning = _check_end(auth, housing, zone, minutes)
+    return {"sent": sent, "minutes": minutes, "end": end, "warning": warning}
 
 
 def cancel_temporary():
@@ -474,7 +514,8 @@ PAGE = """<!doctype html>
   .legend { color: var(--muted); font-size: .72rem; margin: 8px 0 0; }
 
   /* ---- fenêtre « Modif T° » ---- */
-  .modbtn { margin-top: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 8px 16px; border-radius: 999px; }
+  .actionrow { display: flex; align-items: center; gap: 8px; }
+  .modbtn { background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 5px 12px; border-radius: 999px; font-size: .85rem; white-space: nowrap; }
   .modal { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; }
   .modal[hidden] { display: none; }
   .sheet { background: var(--panel); width: 100%; max-width: 560px; max-height: 100%; overflow-y: auto;
@@ -519,17 +560,20 @@ PAGE = """<!doctype html>
     footer { grid-area: foot; padding: 0 4px; overflow: hidden; max-height: 5.5em; }
     .chartwrap { min-height: 0; }
     .card { padding: 8px 10px; border-radius: 14px; }
-    .hero { flex-direction: column; gap: 4px; }
+    .hero { flex-flow: row wrap; justify-content: space-between; align-items: center; gap: 6px; }
+    .hero > div:first-child { flex: 0 0 100%; }
+    .heroside, .actionrow { display: contents; }
+    .icons { order: 3; }
+    .chip { order: 4; }
     .lab { font-size: .7rem; }
     .big { font-size: 2.5rem; }
     .big small { font-size: 1rem; }
     .sub { font-size: .7rem; }
-    .heroside { flex-direction: row; align-items: center; justify-content: space-between; width: 100%; gap: 6px; }
     .iconbtn { width: 34px; height: 34px; }
     .iconbtn svg { width: 18px; height: 18px; }
     .chip { padding: 4px 9px; font-size: .78rem; }
     #heatSub { display: none; }
-    .modbtn { width: 100%; margin-top: 6px; padding: 7px 10px; }
+    .modbtn { order: 2; flex: 0 0 100%; padding: 7px 10px; font-size: .9rem; }
     .stats { grid-template-columns: 1fr; gap: 6px; }
     .stat { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; }
     .stat .v { font-size: 1rem; margin-top: 0; }
@@ -553,7 +597,6 @@ PAGE = """<!doctype html>
         <div class="lab">Température intérieure</div>
         <div class="big"><span id="tIn">–</span><small>°C</small></div>
         <div class="sub" id="tInSub">&nbsp;</div>
-        <button class="modbtn" id="modbtn">Modif T°</button>
       </div>
       <div class="heroside">
         <div class="icons">
@@ -564,7 +607,7 @@ PAGE = """<!doctype html>
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
           </button>
         </div>
-        <span class="chip" id="heat">Chauffage –</span>
+        <div class="actionrow"><button class="modbtn" id="modbtn">Modif T°</button><span class="chip" id="heat">Chauffage –</span></div>
         <div class="sub" id="heatSub" style="text-align:right">&nbsp;</div>
       </div>
     </section>
@@ -1223,10 +1266,10 @@ function closeModal() {
 }
 window.addEventListener("popstate", () => { $("modal").hidden = true; });
 let toastTimer = null;
-function toast(text) {
+function toast(text, ms) {
   $("toast").textContent = text;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").textContent = ""; }, 4500);
+  toastTimer = setTimeout(() => { $("toast").textContent = ""; }, ms || 4500);
 }
 async function modSend(path, body, okText) {
   const msg = $("modMsg");
@@ -1239,7 +1282,8 @@ async function modSend(path, body, okText) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || ("erreur " + r.status));
     closeModal();
-    toast(okText);
+    if (d.warning) toast(d.warning, 12000);
+    else toast(okText + (d.end ? " · fin à " + d.end : ""));
     setTimeout(loop, 1500);
   } catch (e) {
     msg.className = "msg err";
