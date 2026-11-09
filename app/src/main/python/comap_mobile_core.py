@@ -236,7 +236,7 @@ def get_weather():
     query = urllib.parse.urlencode({
         "latitude": LAT, "longitude": LON,
         "hourly": "temperature_2m,shortwave_radiation,sunshine_duration,precipitation,weather_code,is_day",
-        "past_days": 3, "forecast_days": 8,
+        "past_days": 7, "forecast_days": 8,
         "timeformat": "unixtime", "timezone": "Europe/Paris",
     })
     request = urllib.request.Request(os.environ.get("COMAP_WEATHER_URL", "https://api.open-meteo.com/v1/forecast") + "?" + query,
@@ -415,6 +415,8 @@ PAGE = """<!doctype html>
   /* ---- pied de page ---- */
   footer { color: var(--muted); font-size: .72rem; padding: 0 6px 8px; }
   footer a { color: inherit; }
+  #status:empty { display: none; }
+  .night { fill: #8a949a; opacity: .13; }
   #status.err { display: block; background: var(--warn); color: #fff; padding: 8px 12px; border-radius: 12px;
                 margin-bottom: 6px; font-size: .8rem; }
 
@@ -481,7 +483,6 @@ PAGE = """<!doctype html>
     </div>
     <div class="tip idle" id="tip"></div>
     <div class="chartwrap"><svg id="chart" role="img" aria-label="Courbe des températures"></svg></div>
-    <p class="legend" id="legend"></p>
   </section>
 
   <footer>
@@ -603,9 +604,15 @@ function reconcileLive(heat, live, tempKey) {
   heat.known = Math.max(heat.known, 1);
 }
 
-const INSTRUCTIONS = { night: "Nuit", stop: "Arrêt" };
-const instructionText = (v) => (typeof v === "number" ? fmtVal("temperature_instruction", v)
-                                 : INSTRUCTIONS[v] ? INSTRUCTIONS[v] : String(v));
+const INSTRUCTIONS = { night: "Nuit", stop: "Arrêt", frost_protection: "Hors-gel", frost: "Hors-gel", away: "Absence" };
+// mode de consigne renvoyé par Comap (« presence_1 », « night »...) : nom lisible
+function modeName(v) {
+  const s = String(v);
+  if (INSTRUCTIONS[s]) return INSTRUCTIONS[s];
+  if (s.startsWith("presence_")) return "Présence " + s.slice(9);
+  const t = s.split("_").join(" ");
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 function renderNow(measures, pts, heat, battery, live) {
   const lastWith = (m) => { for (let i = pts.length - 1; i >= 0; i--) if (typeof pts[i][m] === "number") return pts[i]; return null; };
@@ -621,10 +628,12 @@ function renderNow(measures, pts, heat, battery, live) {
   // état du chauffage : l'état instantané de Comap prime sur l'historique, qui a du retard
   const hasLive = !!(live && live.at);
   const chip = $("heat"), hsub = $("heatSub");
+  let runningNow = null;
   if (hasLive || heat.known > 0) {
     const lastPeriod = heat.periods[heat.periods.length - 1];
     const histRunning = !!(lastPeriod && !lastPeriod.end);
     const running = hasLive ? live.heating === "heating" : histRunning;
+    runningNow = running;
     chip.textContent = running ? "Chauffe en cours" : "À l'arrêt";
     chip.className = "chip" + (running ? " on" : "");
     let t = "";
@@ -637,11 +646,19 @@ function renderNow(measures, pts, heat, battery, live) {
     hsub.textContent = " ";
   }
 
-  // consigne : état instantané si disponible, sinon dernière mesure archivée
+  // température intérieure : rouge si le chauffage est en marche, bleue sinon
+  $("tIn").style.color = runningNow === null ? "" : runningNow ? "var(--hot)" : "var(--cool)";
+
+  // consigne : température visée. Comap peut renvoyer un mode nommé (« presence_1 ») au lieu d'un nombre :
+  // on affiche alors la dernière consigne chiffrée de l'historique, et le nom du mode en dessous.
   const spLast = lastWith("temperature_instruction");
-  const spVal = live && live.setpoint !== null && live.setpoint !== undefined ? live.setpoint : (spLast ? spLast.temperature_instruction : null);
-  $("sp").textContent = spVal === null ? "–" : instructionText(spVal);
-  $("spSub").textContent = live && live.setpoint != null ? "en ce moment" : (spLast ? "mesure de " + fmtHM(spLast.time) : " ");
+  const liveSp = live ? live.setpoint : null;
+  let spText = "–", spSub = " ";
+  if (typeof liveSp === "number") { spText = fmtVal("temperature_instruction", liveSp); spSub = "en ce moment"; }
+  else if (spLast) { spText = fmtVal("temperature_instruction", spLast.temperature_instruction); spSub = liveSp != null ? modeName(liveSp) : "mesure de " + fmtHM(spLast.time); }
+  else if (liveSp != null) { spText = modeName(liveSp); }
+  $("sp").textContent = spText;
+  $("spSub").textContent = spSub;
 
   // température extérieure : Open-Meteo (interpolée) si disponible, sinon dernière mesure
   const wNow = window.WEATHER ? weatherTempAt(Date.now()) : null;
@@ -714,13 +731,17 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
                   data: [{ t: first, v: live.setpoint }, { t: nowT, v: live.setpoint, ext: true }] });
   }
   const wx = weatherMode > 0 && window.WEATHER;
-  if (wx && !series.some((s) => s.k === "outside_temperature")) {
+  // température extérieure (Open-Meteo) : toujours tracée ; la prévision s'ajoute avec le bouton Météo
+  if (window.WEATHER && !series.some((s) => s.k === "outside_temperature")) {
+    const horizon = weatherMode ? WX_HORIZONS[weatherMode] : 0;
     const data = window.WEATHER.points
-      .filter((p) => typeof p.temp === "number" && p.t * 1000 >= first - 3600000 && p.t * 1000 <= nowT + WX_HORIZONS[weatherMode])
+      .filter((p) => typeof p.temp === "number" && p.t * 1000 >= first - 3600000 && p.t * 1000 <= nowT + horizon)
       .map((p) => ({ t: p.t * 1000, v: p.temp }));
+    const wNow = weatherTempAt(nowT);
+    if (!horizon && wNow !== null) data.push({ t: nowT, v: wNow, ext: true });
     if (data.length > 1) series.push({ k: "outside_temperature", cls: "curve-out", sample: SAMPLE_BY_CLASS["curve-out"], data });
   }
-  if (!series.length) { $("legend").textContent = ""; tipIdle(); return; }
+  if (!series.length) { tipIdle(); return; }
   const all = series.flatMap((s) => s.data);
   // le dessin épouse exactement la zone du graphique (portrait comme paysage)
   const box = svg.getBoundingClientRect();
@@ -742,6 +763,21 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     if (text) e.textContent = text;
     svg.append(e);
   };
+  {
+    const day = new Date(t0);
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - 1);
+    for (let n = 0; n < 40; n++) {
+      const a = new Date(day); a.setHours(22, 30, 0, 0);
+      const e = new Date(day); e.setDate(e.getDate() + 1); e.setHours(6, 30, 0, 0);
+      if (a.getTime() > t1) break;
+      if (e.getTime() > t0) {
+        const xa = x(clamp(a.getTime())), xe = x(clamp(e.getTime()));
+        if (xe > xa) el("rect", { x: xa, y: T, width: xe - xa, height: H - T - B, class: "night" });
+      }
+      day.setDate(day.getDate() + 1);
+    }
+  }
   const nTicks = H < 220 ? 3 : 4;
   for (let i = 0; i <= nTicks; i++) {
     const v = lo + ((hi - lo) * i) / nTicks;
@@ -821,21 +857,6 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     el("line", { x1: x(nowT), x2: x(nowT), y1: T, y2: H - B, class: "nowline" });
     el("text", { x: x(nowT) - 4, y: T + 10, "text-anchor": "end" }, "maintenant");
   }
-  // légende
-  const parts = series.map((s) => s.sample + " " + label(s.k));
-  if (window.OFFSET && keys.includes("inside_temperature")) parts.push("intérieure corrigée de " + signed(window.OFFSET) + " °C");
-  if (window.SP_OFFSET && keys.includes("temperature_instruction")) parts.push("consigne corrigée de " + signed(window.SP_OFFSET) + " °C");
-  if (wx) {
-    const fp = window.WEATHER.points.filter((p) => p.t * 1000 > nowT && p.t * 1000 <= t1);
-    const total = fp.reduce((a, p) => a + (typeof p.precip === "number" ? p.precip : 0), 0);
-    if (hasRain) parts.push("barres bleues : pluie par heure (cumul prévu " + num(total) + " mm)");
-    else parts.push("aucune précipitation prévue");
-    parts.push("icônes : météo toutes les " + wxEvery + " h");
-  }
-  if (hasSun) parts.push("barres jaunes : soleil");
-  if (periods && periods.length) parts.push("zone rouge : chauffage en marche");
-  $("legend").textContent = parts.join("  ·  ");
-
   // ---- lecture des valeurs : barre fixe au-dessus du graphique (jamais sous le doigt) ----
   const hover = document.createElementNS(ns, "g");
   svg.append(hover);
@@ -847,7 +868,8 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     return best;
   };
   const allT = [...new Set(series.flatMap((sr) => (sr.flat ? [] : real(sr)).map((d) => d.t)))];
-  const clearHover = () => { hover.replaceChildren(); window.__sel = null; tipIdle(); };
+  const latestT = (() => { const p = allT.filter((t) => t <= nowT); return p.length ? Math.max(...p) : allT.length ? allT[0] : null; })();
+  const clearHover = () => { hover.replaceChildren(); window.__sel = null; if (latestT !== null) show(latestT, true); else tipIdle(); };
   const item = (parent, cls, text) => {
     const s = document.createElement("span");
     s.className = cls;
@@ -855,15 +877,15 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     parent.append(s);
     return s;
   };
-  const show = (snapped) => {
-    window.__sel = snapped;
+  const show = (snapped, quiet) => {
+    window.__sel = quiet ? null : snapped;
     hover.replaceChildren();
     const mk = (name, attrs) => {
       const e = document.createElementNS(ns, name);
       for (const k in attrs) e.setAttribute(k, attrs[k]);
       hover.append(e);
     };
-    mk("line", { x1: x(snapped), x2: x(snapped), y1: T, y2: H - B, class: "cursor" });
+    if (!quiet) mk("line", { x1: x(snapped), x2: x(snapped), y1: T, y2: H - B, class: "cursor" });
     tip.replaceChildren();
     tip.className = "tip";
     item(tip, "t", fmtTime(snapped) + (snapped > nowT ? " (à venir)" : ""));
@@ -873,11 +895,18 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
         // valeur de consigne en vigueur à cet instant
         const arr = real(sr).filter((d) => d.t <= snapped);
         v = arr.length ? arr[arr.length - 1].v : (sr.flat ? sr.data[0].v : real(sr)[0].v);
-        mk("circle", { cx: x(snapped), cy: y(v), r: 4.5, class: "dot-" + sr.cls });
+        if (!quiet) mk("circle", { cx: x(snapped), cy: y(v), r: 4.5, class: "dot-" + sr.cls });
       } else {
-        const pt = nearest(real(sr), snapped);
-        v = pt.v; at = pt.t;
-        mk("circle", { cx: x(pt.t), cy: y(pt.v), r: 4.5, class: "dot-" + sr.cls });
+        // température extérieure : interpolée entre deux relevés horaires d'Open-Meteo
+        const wv = sr.k === "outside_temperature" && window.WEATHER ? weatherTempAt(snapped) : null;
+        if (wv !== null) {
+          v = wv;
+          if (!quiet) mk("circle", { cx: x(snapped), cy: y(wv), r: 4.5, class: "dot-" + sr.cls });
+        } else {
+          const pt = nearest(real(sr), snapped);
+          v = pt.v; at = pt.t;
+          if (!quiet) mk("circle", { cx: x(pt.t), cy: y(pt.v), r: 4.5, class: "dot-" + sr.cls });
+        }
       }
       const it = item(tip, "it");
       item(it, "sw " + sr.cls);
@@ -916,6 +945,8 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     let snapped = allT[0];
     for (const t of allT) if (Math.abs(t - window.__sel) < Math.abs(snapped - window.__sel)) snapped = t;
     show(snapped);
+  } else if (latestT !== null) {
+    show(latestT, true);
   } else {
     tipIdle();
   }
@@ -933,15 +964,11 @@ async function refresh() {
     window.WEATHER = d.weather && d.weather.points && d.weather.points.length ? d.weather : null;
     $("wxbtn").disabled = !window.WEATHER;
     $("foot").replaceChildren();
-    const corr = [];
-    if (window.OFFSET) corr.push("intérieure " + signed(window.OFFSET) + " °C");
-    if (window.SP_OFFSET) corr.push("consigne " + signed(window.SP_OFFSET) + " °C");
-    if (corr.length) $("foot").append("Corrections : " + corr.join(", ") + ". ");
     if (window.WEATHER) {
       const a = document.createElement("a");
       a.href = "https://open-meteo.com/";
       a.textContent = "Weather data by Open-Meteo.com";
-      $("foot").append("Météo : ", a, " (CC BY 4.0)");
+      $("foot").append(a);
     }
     const all = (d.points || []).filter((p) => p.time).sort((a, b) => new Date(a.time) - new Date(b.time));
     // valeurs datées dans le futur (température extérieure) : tracées en pointillés fins seulement
@@ -955,8 +982,7 @@ async function refresh() {
     reconcileLive(heat, d.live, d.measures[0]);
     renderNow(d.measures, pts, heat, d.battery, d.live);
     renderChart(d.measures, all, heat.periods, limit, heat.known, d.live);
-    setStatus("Actualisé à " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) +
-              (d.weather_error ? " · météo indisponible" : "") + (window.WEATHER || corr.length ? " · " : ""), false);
+    setStatus("", false);
   } catch (e) {
     setStatus("Connexion à Comap impossible : " + e.message, true);
   } finally {
