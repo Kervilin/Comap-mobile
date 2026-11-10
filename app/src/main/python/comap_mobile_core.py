@@ -58,7 +58,7 @@ except ValueError:
     LAT, LON = 47.8736, -3.5486
 # « Modif T° » : limites de la consigne temporaire (comme l'application Comap) et jeton qui protège l'envoi.
 TEMP_MIN, TEMP_MAX = 15.0, 21.0
-MAX_MINUTES = 12 * 60
+MAX_MINUTES = 23 * 60
 DURATION_UNIT_MINUTES = 1  # unité de la durée chez Comap : 1 = minutes (60 = heures)
 TOKEN = secrets.token_urlsafe(18)
 REFRESH = max(20, int(os.environ.get("COMAP_REFRESH", "60")))  # secondes entre deux actualisations de la page
@@ -257,7 +257,7 @@ def set_temporary(temp, minutes):
     if not (TEMP_MIN <= temp <= TEMP_MAX):
         raise ValueError(f"Température hors limites ({TEMP_MIN:g} à {TEMP_MAX:g} °C).")
     if not (1 <= minutes <= MAX_MINUTES):
-        raise ValueError("Durée hors limites (1 minute à 12 heures).")
+        raise ValueError("Durée hors limites (1 minute à 23 heures).")
     # la consigne affichée = valeur de Comap + correction : on retire la correction avant l'envoi
     sent = round((temp - SETPOINT_OFFSET) * 2) / 2
     with _lock:
@@ -495,6 +495,7 @@ PAGE = """<!doctype html>
   svg text { fill: var(--muted); font-size: 11px; }
   svg text.wxicon { font-size: 16px; fill: initial; }
   .grid { stroke: var(--line); stroke-width: 1; }
+  .vgrid { stroke: var(--line); stroke-width: 1; opacity: .6; }
   .curve-in { fill: none; stroke: var(--hot); stroke-width: 2.4; stroke-linejoin: round; }
   .curve-out { fill: none; stroke: var(--cool); stroke-width: 2.2; stroke-dasharray: 7 4; }
   .curve-sp { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 3; }
@@ -663,7 +664,7 @@ PAGE = """<!doctype html>
             <span class="unit" id="dUnit">h</span>
             <button class="pill" id="until" aria-pressed="false">Jusqu'à 22h30</button>
           </div>
-          <div class="hint">De 1 à 12 h, par pas d'1 h</div>
+          <div class="hint">De 1 à 23 h, par pas d'1 h</div>
         </div>
       </div>
       <div class="col">
@@ -975,13 +976,30 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: "grid" });
     el("text", { x: L - 5, y: y(v) + 4, "text-anchor": "end" }, num(v));
   }
-  const steps = W < 520 ? 2 : W < 800 ? 3 : 5;
-  for (let i = 0; i <= steps; i++) {
-    const t = t0 + ((t1 - t0) * i) / steps;
-    const txt = hours > 24 || (t1 - t0) > 30 * 3600000
-      ? new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
-      : fmtHM(t);
-    el("text", { x: x(t), y: H - 7, "text-anchor": i === 0 ? "start" : i === steps ? "end" : "middle" }, txt);
+  // axe du temps : repères sur des heures rondes (heure locale), au plus un tous les ~58 px
+  {
+    const span = t1 - t0 || 1;
+    const pxPerHour = (W - L - R) / (span / 3600000);
+    const step = [1, 2, 3, 4, 6, 12, 24, 48, 72, 96, 168].find((h) => h * pxPerHour >= 58) || 168;
+    const d = new Date(t0);
+    d.setMinutes(0, 0, 0);
+    if (step < 24) {
+      while (d.getTime() < t0 || d.getHours() % step !== 0) d.setHours(d.getHours() + 1);
+    } else {
+      d.setHours(0, 0, 0, 0);
+      if (d.getTime() < t0) d.setDate(d.getDate() + 1);
+    }
+    const longSpan = span > 30 * 3600000;
+    for (let n = 0; n < 60 && d.getTime() <= t1; n++) {
+      const xt = x(d.getTime());
+      const midnight = d.getHours() === 0 && d.getMinutes() === 0;
+      const txt = longSpan && midnight
+        ? d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })
+        : fmtHM(d.getTime());
+      el("line", { x1: xt, x2: xt, y1: T, y2: H - B, class: "vgrid" });
+      el("text", { x: xt, y: H - 7, "text-anchor": xt < L + 18 ? "start" : xt > W - R - 18 ? "end" : "middle" }, txt);
+      if (step < 24) d.setHours(d.getHours() + step); else d.setDate(d.getDate() + step / 24);
+    }
   }
   // ensoleillement Open-Meteo : une barre par heure
   let hasSun = false;
@@ -1211,7 +1229,7 @@ document.addEventListener("touchend", (e) => {
 // ---- Modif T° : consigne temporaire envoyée au thermostat ----
 const TOKEN = "__TOKEN__";
 const MOD = { temp: 19, hours: 1, until: false };
-const T_MIN = 15, T_MAX = 21, H_MIN = 1, H_MAX = 12, UNTIL_HM = [22, 30];
+const T_MIN = 15, T_MAX = 21, H_MIN = 1, H_MAX = 23, UNTIL_HM = [22, 30];
 const pad2 = (n) => String(n).padStart(2, "0");
 function untilTarget() {
   const n = new Date(), t = new Date(n);
