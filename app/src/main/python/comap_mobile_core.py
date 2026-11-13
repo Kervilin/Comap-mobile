@@ -716,6 +716,7 @@ const label = (k) => LABELS[k] || k;
 const num = (v, d = 1) => (typeof v === "number" ? v.toFixed(d).replace(".", ",") : "–");
 const fmtVal = (k, v) => (typeof v === "number" ? num(v) + (UNITS[k] || "") : "–");
 const fmtTime = (t) => new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const fmtDay = (t) => new Date(t).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "2-digit" });
 const fmtHM = (t) => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 const signed = (v) => (v > 0 ? "+" : "") + num(v);
 
@@ -940,7 +941,8 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
   const W = Math.max(240, Math.round(box.width || 320));
   const H = Math.max(160, Math.round(box.height || 260));
   const wxEvery = weatherMode === 2 ? (W < 600 ? 24 : 6) : (W < 600 ? 6 : 3);
-  const L = W < 600 ? 36 : 46, R = 10, T = wx ? 30 : 10, B = 24;
+  const longRange = Math.max(...all.map((d) => d.t)) - Math.min(...all.map((d) => d.t)) > 30 * 3600000;
+  const L = W < 600 ? 36 : 46, R = 10, T = wx ? 30 : 10, B = longRange ? 34 : 24;
   svg.setAttribute("viewBox", "0 0 " + W + " " + H);
   const t0 = Math.min(...all.map((d) => d.t)), t1 = Math.max(...all.map((d) => d.t));
   let lo = Math.min(...all.map((d) => d.v)), hi = Math.max(...all.map((d) => d.v));
@@ -993,11 +995,16 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     for (let n = 0; n < 60 && d.getTime() <= t1; n++) {
       const xt = x(d.getTime());
       const midnight = d.getHours() === 0 && d.getMinutes() === 0;
-      const txt = longSpan && midnight
-        ? d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })
-        : fmtHM(d.getTime());
       el("line", { x1: xt, x2: xt, y1: T, y2: H - B, class: "vgrid" });
-      el("text", { x: xt, y: H - 7, "text-anchor": xt < L + 18 ? "start" : xt > W - R - 18 ? "end" : "middle" }, txt);
+      const anchor = xt < L + 18 ? "start" : xt > W - R - 18 ? "end" : "middle";
+      if (longSpan && midnight) {
+        // minuit : nom du jour au-dessus, date en dessous
+        const parts = fmtDay(d.getTime()).split(" ");
+        el("text", { x: xt, y: H - 21, "text-anchor": anchor }, parts[0]);
+        el("text", { x: xt, y: H - 7, "text-anchor": anchor }, parts[1]);
+      } else {
+        el("text", { x: xt, y: H - 7, "text-anchor": anchor }, fmtHM(d.getTime()));
+      }
       if (step < 24) d.setHours(d.getHours() + step); else d.setDate(d.getDate() + step / 24);
     }
   }
@@ -1097,7 +1104,7 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     if (!quiet) mk("line", { x1: x(snapped), x2: x(snapped), y1: T, y2: H - B, class: "cursor" });
     tip.replaceChildren();
     tip.className = "tip";
-    item(tip, "t", fmtTime(snapped) + (snapped > nowT ? " (à venir)" : ""));
+    item(tip, "t", fmtDay(snapped) + " " + fmtHM(snapped) + (snapped > nowT ? " (à venir)" : ""));
     series.forEach((sr) => {
       let v, at = snapped;
       if (sr.step) {
