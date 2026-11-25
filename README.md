@@ -12,6 +12,10 @@ et la page s'affiche dans une WebView intégrée.
   graphique (elle reste affichée après avoir levé le doigt) ;
 - en mode paysage : valeurs à gauche, graphique en pleine hauteur à droite, barre d'état masquée.
 
+**Modif T°** : ce bouton ouvre une fenêtre pour fixer une consigne TEMPORAIRE (15 à 21 °C par pas de 0,5 °C, durée de 1 à 12 h
+ou « jusqu'à 22h30 »). « Valider » l'envoie au thermostat ; « Annuler la modif » la supprime et Comap reprend son programme.
+La correction de consigne (+0,5 °C par défaut) est retirée avant l'envoi. C'est la seule fonction qui écrit chez Comap.
+
 Pas de barre de titre : l'engrenage (en haut à droite) ouvre les réglages, la flèche circulaire actualise
 (tirer l'écran vers le bas depuis le haut fonctionne aussi). La stratégie du lendemain a été retirée.
 
@@ -49,4 +53,4 @@ L'APK est signé avec la clé de débogage : suffisant pour un usage personnel.
 ## Remarques
 - L'APK est assez volumineux (~50 Mo) : il embarque Python et boto3 (connexion Comap).
 - Versions utilisées : Chaquopy 17.0.0, Android Gradle Plugin 8.7.3, Gradle 8.9, Python 3.12, minSdk 24.
-- Programme non officiel : Comap peut modifier son service à tout moment. Lecture seule.
+- Programme non officiel : Comap peut modifier son service à tout moment. Lecture des mesures ; seule la fonction « Modif T° » écrit chez Comap.
