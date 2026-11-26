@@ -355,6 +355,20 @@ def get_weather():
                            "code": hourly["weather_code"][i],      # code météo WMO
                            "day": hourly["is_day"][i]})            # 1 = jour, 0 = nuit
         points.sort(key=lambda p: p["t"])
+        # Cumuls du jour (soleil et pluie), utilisés par les cases de la page.
+        # Le décalage horaire fourni par Open-Meteo évite toute dépendance à tzdata.
+        offset = int(data.get("utc_offset_seconds") or 0)
+        sun_day, rain_day = {}, {}
+        for p in points:
+            key = datetime.utcfromtimestamp(p["t"] + offset).date().isoformat()
+            if isinstance(p.get("sun_min"), (int, float)):
+                sun_day[key] = sun_day.get(key, 0.0) + p["sun_min"]
+            if isinstance(p.get("precip"), (int, float)):
+                rain_day[key] = rain_day.get(key, 0.0) + p["precip"]
+        for p in points:
+            key = datetime.utcfromtimestamp(p["t"] + offset).date().isoformat()
+            p["sun_day_min"] = round(sun_day.get(key, 0.0))
+            p["rain_day_mm"] = round(rain_day.get(key, 0.0), 1)
         _weather["value"] = {"points": points, "lat": LAT, "lon": LON}
         _weather["t"] = time.time()
     except Exception:
@@ -467,6 +481,16 @@ PAGE = """<!doctype html>
   .stat .v { font-size: 1.25rem; font-weight: 500; margin-top: 2px; white-space: nowrap; }
   .stat .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+  /* ---- correctif : piles sous 4,10 V en rouge clignotant ---- */
+  /* actualisation par tirage vers le bas : le bouton de la barre d'outils est retiré */
+  #refbtn { display: none; }
+  /* température intérieure : « mesure de HH:MM » puis la tendance sur une 2e ligne */
+  #tInSub { white-space: pre-line; }
+  @keyframes batLowBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .35; } }
+  #bat.low, #batSub.low { color: var(--warn); }
+  #bat.low { animation: batLowBlink 1.1s steps(1, end) infinite; }
+  @media (prefers-reduced-motion: reduce) { #bat.low { animation: none; } }
+
   /* ---- graphique ---- */
   .chartcard { display: flex; flex-direction: column; padding: 12px; flex: 1 1 auto; }
   .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -480,10 +504,39 @@ PAGE = """<!doctype html>
   .pill { background: var(--chip); padding: 9px 14px; font-weight: 500; }
   .pill[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .pill:disabled { opacity: .4; }
-  .tip { height: 3.9em; overflow: hidden; font-size: .8rem; line-height: 1.3; color: var(--ink); margin-bottom: 4px; }
-  .tip.idle { color: var(--muted); display: flex; align-items: center; }
-  .tip .t { font-weight: 600; margin-right: 8px; }
-  .tip .it { display: inline-block; margin-right: 12px; white-space: nowrap; }
+  /* bandeau de lecture : en-têtes sur la 1re ligne, valeurs sur la 2e */
+  /* bandeau de lecture : six petits carrés arrondis comme les cartes de valeurs */
+  .tip { color: var(--ink); margin-bottom: 8px; }
+  .tip.idle { color: var(--muted); display: flex; align-items: center; font-size: .8rem; min-height: 2.6em; }
+  .tip-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .tip-cell { min-width: 0; padding: 5px 7px 6px; border-radius: 11px;
+              border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+              background: var(--panel); box-shadow: 0 1px 2px rgba(0, 0, 0, .04); }
+  .tip-head { color: var(--muted); font-size: .59rem; font-weight: 600; letter-spacing: .02em;
+              text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tip-value { margin-top: 2px; font-size: .78rem; font-weight: 600; line-height: 1.25;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tip-value.tip-in { color: var(--hot); }
+  .tip-value.tip-sp { color: var(--accent); }
+  .tip-value.tip-out { color: var(--cool); }
+  .tip-value.tip-sky { color: var(--ink); }
+  .tip-head-sky { text-transform: none; letter-spacing: 0; font-size: .68rem; color: var(--ink); }
+  .tip-cell.nohead { padding-top: 4px; }
+  .tip-cell.nohead .tip-value { margin-top: 0; }
+  .tip-value.tip-sun { color: var(--sun); }
+  .tip-value.sky-value { font-size: .72rem; }
+  .tip-hm { color: var(--muted); font-size: .66rem; font-weight: 400; }
+  .tip-note { margin-top: 1px; color: var(--muted); font-size: .6rem; line-height: 1.2;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 560px) {
+    .tip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+    .tip-cell { padding: 4px 6px 5px; border-radius: 9px; }
+    .tip-head { font-size: .55rem; letter-spacing: 0; }
+    .tip-value { font-size: .72rem; }
+    .tip-value.sky-value { font-size: .64rem; }
+    .tip-hm { font-size: .58rem; }
+    .tip-note { font-size: .55rem; }
+  }
   .tip .sw { display: inline-block; width: 14px; height: 0; border-top: 3px solid var(--ink); margin-right: 5px;
              vertical-align: middle; }
   .tip .sw.curve-out, .tip .sw.curve-sp { border-top-style: dashed; }
@@ -579,7 +632,7 @@ PAGE = """<!doctype html>
     .stat { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; }
     .stat .v { font-size: 1rem; margin-top: 0; }
     .stat .sub { display: none; }
-    .tip { height: 2.7em; }
+    .tip { min-height: 2.7em; height: auto; }
     .seg button { padding: 6px 4px; }
     .pill { padding: 7px 12px; }
     .modal { align-items: center; }
@@ -813,7 +866,7 @@ function renderNow(measures, pts, heat, battery, live) {
   $("tIn").textContent = num(last[main]);
   let sub = "mesure de " + fmtHM(last.time);
   const ref = pts.find((p) => tms(p) >= tms(last) - 3600000 && typeof p[main] === "number");
-  if (ref && ref !== last && typeof last[main] === "number") sub += " · " + signed(last[main] - ref[main]) + " sur 1 h";
+  if (ref && ref !== last && typeof last[main] === "number") sub += "\\n" + signed(last[main] - ref[main]) + " sur 1 h";
   $("tInSub").textContent = sub;
 
   // état du chauffage : l'état instantané de Comap prime sur l'historique, qui a du retard
@@ -868,11 +921,16 @@ function renderNow(measures, pts, heat, battery, live) {
   // niveau des piles : tension relevée par le thermostat
   if (battery && typeof battery.value === "number") {
     const v = battery.value > 50 ? battery.value / 1000 : battery.value;
+    const low = v < 4.1;  // rouge clignotant uniquement sous 4,10 V
     $("bat").textContent = num(v, 2) + " V";
+    $("bat").classList.toggle("low", low);
     $("batSub").textContent = fmtTime(battery.time);
+    $("batSub").classList.toggle("low", low);
   } else {
     $("bat").textContent = "–";
+    $("bat").classList.remove("low");
     $("batSub").textContent = "pas de mesure (7 j)";
+    $("batSub").classList.remove("low");
   }
 }
 
@@ -1102,9 +1160,7 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
       hover.append(e);
     };
     if (!quiet) mk("line", { x1: x(snapped), x2: x(snapped), y1: T, y2: H - B, class: "cursor" });
-    tip.replaceChildren();
-    tip.className = "tip";
-    item(tip, "t", fmtDay(snapped) + " " + fmtHM(snapped) + (snapped > nowT ? " (à venir)" : ""));
+    const values = {};
     series.forEach((sr) => {
       let v, at = snapped;
       if (sr.step) {
@@ -1124,24 +1180,88 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
           if (!quiet) mk("circle", { cx: x(pt.t), cy: y(pt.v), r: 4.5, class: "dot-" + sr.cls });
         }
       }
-      const it = item(tip, "it");
-      item(it, "sw " + sr.cls);
-      it.append((SHORT[sr.k] || label(sr.k)) + " " + fmtVal(sr.k, v));
-      if (!sr.step && Math.abs(at - snapped) > 5 * 60000) item(it, "soft", " (" + fmtHM(at) + ")");
+      values[sr.k] = v;
     });
-    if (heatKnown > 0 && snapped <= nowT) {
-      const on = (periods || []).some((pr) => tms(pr.start) <= snapped && snapped <= (pr.end ? tms(pr.end) : tms(pr.last)));
-      const it = item(tip, "it", "Chauffage : ");
-      item(it, on ? "hot" : "", on ? "en marche" : "à l'arrêt");
-    }
-    const hp = weatherHourAt(snapped);
-    if (wx && hp && typeof hp.code === "number") {
-      const info = wxInfo(hp.code, hp.day);
-      item(tip, "it", info[1] + " " + info[0] + (typeof hp.precip === "number" && hp.precip > 0 ? " · " + num(hp.precip) + " mm" : ""));
-    }
-    if (hp && typeof hp.rad === "number" && hp.rad > 0) {
-      item(tip, "it", "Soleil : " + Math.round(hp.rad) + " W/m²" + (typeof hp.sun_min === "number" ? " · " + Math.round(hp.sun_min) + " min" : ""));
-    }
+
+    const inside = typeof values.inside_temperature === "number" ? values.inside_temperature : null;
+    const sp = typeof values.temperature_instruction === "number" ? values.temperature_instruction
+             : (typeof window.SP_NOW === "number" ? window.SP_NOW : null);
+    let out = typeof values.outside_temperature === "number" ? values.outside_temperature : null;
+    if (out === null && window.WEATHER) out = weatherTempAt(snapped);
+
+    // météo de l'heure : « soleil ou pluie », avec le détail dans l'infobulle
+    // météo de l'heure, exactement comme la ligne d'origine (sans le chauffage) :
+    // 1) icône + description + précipitations, 2) rayonnement + minutes de soleil
+    const hpBase = weatherHourAt(snapped);
+    const hp = hpBase && typeof hpBase.code === "number"
+      ? Object.assign({}, hpBase, { info: wxInfo(hpBase.code, hpBase.day) })
+      : null;
+
+    // six petits carrés : jour, T° int., consigne, T° ext., météo, soleil
+    // valeurs Open-Meteo de l'heure sélectionnée :
+    // temperature_2m (T° ext.), weather_code + is_day, precipitation (météo + mm),
+    // shortwave_radiation + sunshine_duration (soleil)
+    const dayDate = new Date(snapped);
+    const dayName = dayDate.toLocaleDateString("fr-FR", { weekday: "long" });
+    const dateText = dayDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const sunMin = hp && typeof hp.sun_min === "number" ? Math.round(hp.sun_min) : null;
+    const radiation = hp && typeof hp.rad === "number" ? Math.round(hp.rad) : null;
+    const precip = hp && typeof hp.precip === "number" ? hp.precip : null;
+
+    // 1re case météo : notion (bruine, couvert, dégagé, pluie…) + mm s'il pleut
+    const skyLabel = hp && hp.info ? hp.info[1] + " " + hp.info[0] : "Météo indisponible";
+    const skyValue = (hp && hp.info ? hp.info[0] : "Météo indisponible")
+      + (precip !== null && precip > 0 ? " · " + num(precip) + " mm" : "");
+
+    // 2e case météo : soleil (rayonnement W/m²) + durée en minutes, sans titre
+    const sunIcon = hp && hp.day === 0 ? "🌙" : "☀️";
+    const sunValue = radiation === null ? "–" : sunIcon + " " + radiation + " W/m²";
+    const sunNote = sunMin === null ? "–" : sunMin + " min";
+
+    // rappel de l'heure pour l'infobulle
+    const hourLabel = fmtHM(snapped) + (snapped > nowT ? " (à venir)" : "");
+
+    const cards = [
+      { label: dayName.charAt(0).toUpperCase() + dayName.slice(1), value: dateText,
+        note: hourLabel, cls: "tip-date",
+        title: fmtDay(snapped) + " " + fmtHM(snapped) + (snapped > nowT ? " (à venir)" : "") },
+      { label: "T° int.", value: inside === null ? "–" : num(inside) + " °C", cls: "tip-in" },
+      { label: "Consigne", value: sp === null ? "–" : num(sp) + " °C", cls: "tip-sp" },
+      { label: "T° ext.", value: out === null ? "–" : num(out) + " °C", cls: "tip-out" },
+      { label: "Météo", value: skyValue, cls: "tip-sky sky-value",
+        title: skyLabel + (precip !== null && precip > 0 ? " · " + num(precip) + " mm sur l'heure précédente" : "") },
+      { label: null, value: sunValue, note: sunNote, cls: "tip-sun",
+        title: "Rayonnement solaire : " + (radiation === null ? "–" : radiation + " W/m²")
+             + " · ensoleillement : " + (sunMin === null ? "–" : sunMin + " min") }
+    ];
+
+    tip.replaceChildren();
+    tip.className = "tip";
+    const grid = document.createElement("div");
+    grid.className = "tip-grid";
+    cards.forEach((card) => {
+      const cell = document.createElement("div");
+      cell.className = "tip-cell" + (card.label ? "" : " nohead");
+      if (card.label) {
+        const head = document.createElement("div");
+        head.className = "tip-head";
+        head.textContent = card.label;
+        cell.append(head);
+      }
+      const value = document.createElement("div");
+      value.className = "tip-value " + card.cls;
+      value.textContent = card.value;
+      cell.append(value);
+      if (card.note) {
+        const note = document.createElement("div");
+        note.className = "tip-note";
+        note.textContent = card.note;
+        cell.append(note);
+      }
+      if (card.title) cell.title = card.title;
+      grid.append(cell);
+    });
+    tip.append(grid);
   };
   const onMove = (ev) => {
     const rect = svg.getBoundingClientRect();
