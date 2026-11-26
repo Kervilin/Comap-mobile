@@ -1,0 +1,51 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Nécessaire pour attacher l'APK à une Release (téléchargement public, sans connexion).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Compiler l'APK
+        run: |
+          SETTINGS=$(find . -name settings.gradle.kts -not -path "./.git/*" | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "ERREUR : settings.gradle.kts est introuvable."
+            ls -a
+            exit 1
+          fi
+          cd "$(dirname "$SETTINGS")"
+          gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Publier l'APK en Release (lien public)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: APK Comap ${{ github.run_number }}
+          body: "APK compilée automatiquement depuis le commit ${{ github.sha }}."
+          files: "**/app-debug.apk"
+          fail_on_unmatched_files: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: comap-chauffage-apk
+          path: "**/app-debug.apk"
