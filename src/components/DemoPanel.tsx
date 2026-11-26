@@ -8,14 +8,24 @@ import {
   ExternalLink,
   FileCode2,
   GitBranch,
+  GitCommitHorizontal,
   Loader2,
   RefreshCw,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { HOURLY_VARIABLES } from "../openMeteo";
 import { cn } from "../utils/cn";
 
 export const LOW_VOLTAGE = 4.1;
+
+const LATEST_COMMIT = "2898cbd";
+const LATEST_COMMIT_URL =
+  "https://github.com/Kervilin/Comap-mobile/commit/2898cbddb1b5b22670b7628edd8b3e91a8513c41";
+const ANDROID_CORE_URL =
+  "https://github.com/Kervilin/Comap-mobile/blob/main/app/src/main/python/comap_mobile_core.py";
+const FIXED_CORE_URL =
+  "https://github.com/Kervilin/Comap-mobile/blob/main/public/comap_mobile_core_4.1V.py";
 
 type DemoPanelProps = {
   open: boolean;
@@ -358,6 +368,100 @@ export function DemoPanel({
           </div>
 
           <div className="border-b border-[#e9eeea] px-4 py-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.13em] text-[#7e8e85]">
+                <GitCommitHorizontal className="h-3 w-3" />
+                Version &amp; GitHub
+              </p>
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#eaf4ee] px-2 py-0.5 text-[8.5px] font-bold text-[#2f6b4e]">
+                <span className="h-1 w-1 rounded-full bg-[#4b9670]" />
+                vérifié
+              </span>
+            </div>
+
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[9px] text-[#7d8e85]">Dernier commit</span>
+                <a
+                  href={LATEST_COMMIT_URL}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 font-mono text-[9px] font-semibold text-[#2c6577] hover:underline"
+                >
+                  {LATEST_COMMIT}
+                  <ArrowUpRight className="h-2.5 w-2.5" />
+                </a>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[9px] text-[#7d8e85]">Date du dépôt</span>
+                <span className="font-mono text-[9px] font-medium text-[#42564c]">
+                  26/11/2026 · 21:01 UTC
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[9px] text-[#7d8e85]">Sources web</span>
+                <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-[#2f6b4e]">
+                  <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                  identiques
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-2.5 flex items-start gap-2 rounded-md border border-[#eadfcc] bg-[#fdfaf3] px-2.5 py-2">
+              <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0 text-[#9a6a18]" />
+              <div>
+                <p className="text-[9px] font-bold leading-snug text-[#6b5121]">
+                  L’APK ne reçoit pas encore le correctif
+                </p>
+                <p className="mt-0.5 text-[8.5px] leading-relaxed text-[#8a7a58]">
+                  Sur GitHub, <code className="font-mono text-[8px]">app/src/main/python/comap_mobile_core.py</code>{" "}
+                  est resté le fichier d’origine. Le fichier corrigé est dans{" "}
+                  <code className="font-mono text-[8px]">public/</code>, que le build Android
+                  n’utilise pas.
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-2 text-[8.5px] leading-relaxed text-[#7a8b82]">
+              Pour corriger l’APK&nbsp;: téléchargez ci-dessous, puis remplacez{" "}
+              <code className="font-mono text-[8px]">app/src/main/python/comap_mobile_core.py</code>{" "}
+              par ce fichier et relancez «&nbsp;Build APK&nbsp;».
+              Aucun site n’est publié par GitHub Pages&nbsp;: cet aperçu est un build distinct,
+              il ne se met pas à jour quand vous poussez sur GitHub.
+            </p>
+
+            <a
+              href="/android/comap_mobile_core.py"
+              download="comap_mobile_core.py"
+              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-[#9fc1b2] bg-[#eef6f1] px-2 py-2 text-[9px] font-bold text-[#2a6147] transition-colors hover:bg-[#e4f1e9]"
+            >
+              <ArrowDownToLine className="h-3 w-3" />
+              Télécharger le fichier pour l’APK (même nom)
+            </a>
+
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+              <a
+                href={FIXED_CORE_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 text-[8.5px] font-semibold text-[#3d655c] hover:underline"
+              >
+                Fichier corrigé sur GitHub
+                <ArrowUpRight className="h-2.5 w-2.5" />
+              </a>
+              <a
+                href={ANDROID_CORE_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 text-[8.5px] font-semibold text-[#3d655c] hover:underline"
+              >
+                Fichier utilisé par l’APK
+                <ArrowUpRight className="h-2.5 w-2.5" />
+              </a>
+            </div>
+          </div>
+
+          <div className="border-b border-[#e9eeea] px-4 py-3.5">
             <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.13em] text-[#7e8e85]">
               <RefreshCw className="h-3 w-3" />
               Actualisation
@@ -406,7 +510,7 @@ export function DemoPanel({
             className="inline-flex min-w-0 items-center gap-1.5 text-[9px] font-semibold text-[#5d7369] hover:text-[#22392f]"
           >
             <GitBranch className="h-3 w-3 shrink-0" />
-            <span className="truncate">main @ 4ed244f</span>
+            <span className="truncate">main @ 2898cbd</span>
           </a>
           <button
             type="button"
