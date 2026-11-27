@@ -455,8 +455,11 @@ PAGE = """<!doctype html>
                overscroll-behavior: none; -webkit-user-select: none; user-select: none;
                -webkit-touch-callout: none; }
   body { font: 15px/1.4 Roboto, system-ui, "Segoe UI", sans-serif; }
-  #app { display: flex; flex-direction: column; gap: 12px; padding: 12px; max-width: 900px; margin: 0 auto;
+  #app { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; max-width: 900px; margin: 0 auto;
          min-height: 100vh; min-height: 100dvh; }
+  /* un peu d'air entre la carte principale et les trois carrés, */
+  /* et un écart plus discret entre ces carrés et le graphique */
+  #side { display: flex; flex-direction: column; gap: 11px; }
   .card { background: var(--panel); border-radius: 18px; box-shadow: var(--shadow); padding: 14px 16px; }
 
   /* ---- valeurs actuelles ---- */
@@ -480,6 +483,9 @@ PAGE = """<!doctype html>
   .stat { padding: 10px 12px; }
   .stat .v { font-size: 1.25rem; font-weight: 500; margin-top: 2px; white-space: nowrap; }
   .stat .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* piles faibles : toute la zone « Piles » sur fond rouge clair */
+  .stat.bat-low { background: var(--warn-soft, #fbe9e6); box-shadow: inset 0 0 0 1px #e7b8b0, var(--shadow); }
+  .stat.bat-low .lab { color: var(--warn); font-weight: 600; }
 
   /* ---- correctif : piles sous 4,10 V en rouge clignotant ---- */
   /* actualisation par tirage vers le bas : le bouton de la barre d'outils est retiré */
@@ -492,29 +498,30 @@ PAGE = """<!doctype html>
   @media (prefers-reduced-motion: reduce) { #bat.low { animation: none; } }
 
   /* ---- graphique ---- */
-  .chartcard { display: flex; flex-direction: column; padding: 12px; flex: 1 1 auto; }
-  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-  .seg { display: flex; background: var(--chip); border-radius: 12px; padding: 3px; gap: 2px; flex: 1; }
+  /* le graphique s'étire pour occuper la hauteur restante de l'écran */
+  .chartcard { display: flex; flex-direction: column; padding: 9px 12px 10px; flex: 1 1 auto; min-height: 0; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .seg { display: flex; background: var(--chip); border-radius: 11px; padding: 2px; gap: 2px; flex: 1; }
   .seg button { flex: 1; }
   button { font: inherit; color: var(--ink); background: transparent; border: 0; border-radius: 10px;
-           padding: 8px 6px; cursor: pointer; transition: transform .08s, background .15s; }
+           padding: 7px 6px; cursor: pointer; transition: transform .08s, background .15s; }
   button:active { transform: scale(.96); }
   .seg button[aria-pressed="true"] { background: var(--panel); color: var(--accent); font-weight: 600;
                                      box-shadow: 0 1px 3px rgba(0,0,0,.18); }
-  .pill { background: var(--chip); padding: 9px 14px; font-weight: 500; }
+  .pill { background: var(--chip); padding: 7px 14px; font-weight: 500; }
   .pill[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .pill:disabled { opacity: .4; }
   /* bandeau de lecture : en-têtes sur la 1re ligne, valeurs sur la 2e */
   /* bandeau de lecture : six petits carrés arrondis comme les cartes de valeurs */
-  .tip { color: var(--ink); margin-bottom: 8px; }
+  .tip { color: var(--ink); margin-bottom: 5px; }
   .tip.idle { color: var(--muted); display: flex; align-items: center; font-size: .8rem; min-height: 2.6em; }
   .tip-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
-  .tip-cell { min-width: 0; padding: 5px 7px 6px; border-radius: 11px;
+  .tip-cell { min-width: 0; padding: 4px 7px 5px; border-radius: 11px;
               border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
               background: var(--panel); box-shadow: 0 1px 2px rgba(0, 0, 0, .04); }
   .tip-head { color: var(--muted); font-size: .59rem; font-weight: 600; letter-spacing: .02em;
               text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tip-value { margin-top: 2px; font-size: .78rem; font-weight: 600; line-height: 1.25;
+  .tip-value { margin-top: 1px; font-size: .78rem; font-weight: 600; line-height: 1.2;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tip-value.tip-in { color: var(--hot); }
   .tip-value.tip-sp { color: var(--accent); }
@@ -529,8 +536,8 @@ PAGE = """<!doctype html>
   .tip-note { margin-top: 1px; color: var(--muted); font-size: .6rem; line-height: 1.2;
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 560px) {
-    .tip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-    .tip-cell { padding: 4px 6px 5px; border-radius: 9px; }
+    .tip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+    .tip-cell { padding: 3px 6px 4px; border-radius: 9px; }
     .tip-head { font-size: .55rem; letter-spacing: 0; }
     .tip-value { font-size: .72rem; }
     .tip-value.sky-value { font-size: .64rem; }
@@ -543,7 +550,9 @@ PAGE = """<!doctype html>
   .sw.curve-in { border-color: var(--hot); } .sw.curve-out { border-color: var(--cool); } .sw.curve-sp { border-color: var(--accent); }
   .tip .soft { color: var(--muted); }
   .tip .hot { color: var(--hot); font-weight: 600; }
-  .chartwrap { position: relative; flex: 1 1 auto; min-height: 260px; }
+  .chartwrap { position: relative; flex: 1 1 auto; min-height: 176px; }
+  /* le pied de page reste collé en bas, sans laisser de vide */
+  footer { margin-top: auto; }
   #chart { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: pan-y; }
   svg text { fill: var(--muted); font-size: 11px; }
   svg text.wxicon { font-size: 16px; fill: initial; }
@@ -607,7 +616,8 @@ PAGE = """<!doctype html>
   /* ---- paysage : valeurs à gauche (étroit), graphique pleine hauteur à droite ---- */
   @media (orientation: landscape) and (max-height: 560px) {
     html, body { height: 100%; overflow: hidden; }
-    #app { display: grid; grid-template-columns: clamp(158px, 21%, 210px) 1fr; grid-template-rows: 1fr auto;
+    /* colonne de gauche plus étroite : davantage de place pour la courbe */
+    #app { display: grid; grid-template-columns: clamp(132px, 16%, 172px) 1fr; grid-template-rows: 1fr auto;
            grid-template-areas: "side chart" "foot chart"; height: 100vh; min-height: 0; max-width: none; gap: 6px 8px; padding: 8px 10px; }
     #side { grid-area: side; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
     .chartcard { grid-area: chart; min-height: 0; }
@@ -619,8 +629,17 @@ PAGE = """<!doctype html>
     .heroside, .actionrow { display: contents; }
     .icons { order: 3; }
     .chip { order: 4; }
-    .lab { font-size: .7rem; }
-    .big { font-size: 2.5rem; }
+    .lab { font-size: .66rem; }
+    .big { font-size: 2.45rem; }
+    /* l'heure de la mesure, mise en avant */
+    #tInSub { font-size: .76rem; line-height: 1.4; }
+    #tInSub .hm { font-size: .98rem; font-weight: 600; color: var(--ink); }
+    .stat .v { font-size: .96rem; }
+    /* la case « jour · heure » reçoit un peu plus de largeur en paysage */
+    .tip-grid { grid-template-columns: 1.34fr repeat(5, minmax(0, 1fr)); gap: 5px; }
+    .tip-cell { padding: 4px 6px 5px; }
+    .tip-head { font-size: .6rem; letter-spacing: 0; }
+    .tip-value { font-size: .82rem; }
     .big small { font-size: 1rem; }
     .sub { font-size: .7rem; }
     .iconbtn { width: 34px; height: 34px; }
@@ -668,7 +687,7 @@ PAGE = """<!doctype html>
     <section class="stats" aria-label="Autres valeurs">
       <div class="card stat"><div class="lab">Consigne</div><div class="v" id="sp">–</div><div class="sub" id="spSub">&nbsp;</div></div>
       <div class="card stat"><div class="lab">Extérieur</div><div class="v" id="tOut">–</div><div class="sub" id="tOutSub">&nbsp;</div></div>
-      <div class="card stat"><div class="lab">Piles</div><div class="v" id="bat">–</div><div class="sub" id="batSub">&nbsp;</div></div>
+      <div class="card stat" id="batCard"><div class="lab">Piles</div><div class="v" id="bat">–</div><div class="sub" id="batSub">&nbsp;</div></div>
     </section>
   </div>
 
@@ -864,10 +883,10 @@ function renderNow(measures, pts, heat, battery, live) {
   const main = measures.includes("inside_temperature") ? "inside_temperature" : measures[0];
   const last = lastWith(main) || pts[pts.length - 1];
   $("tIn").textContent = num(last[main]);
-  let sub = "mesure de " + fmtHM(last.time);
+  let sub = 'mesure de <span class="hm">' + fmtHM(last.time) + "</span>";
   const ref = pts.find((p) => tms(p) >= tms(last) - 3600000 && typeof p[main] === "number");
   if (ref && ref !== last && typeof last[main] === "number") sub += "\\n" + signed(last[main] - ref[main]) + " sur 1 h";
-  $("tInSub").textContent = sub;
+  $("tInSub").innerHTML = sub;
 
   // état du chauffage : l'état instantané de Comap prime sur l'historique, qui a du retard
   const hasLive = !!(live && live.at);
@@ -924,11 +943,13 @@ function renderNow(measures, pts, heat, battery, live) {
     const low = v < 4.1;  // rouge clignotant uniquement sous 4,10 V
     $("bat").textContent = num(v, 2) + " V";
     $("bat").classList.toggle("low", low);
+    $("batCard").classList.toggle("bat-low", low);
     $("batSub").textContent = fmtTime(battery.time);
     $("batSub").classList.toggle("low", low);
   } else {
     $("bat").textContent = "–";
     $("bat").classList.remove("low");
+    $("batCard").classList.remove("bat-low");
     $("batSub").textContent = "pas de mesure (7 j)";
     $("batSub").classList.remove("low");
   }
@@ -1222,8 +1243,8 @@ function renderChart(measures, pts, periods, nowT, heatKnown, live) {
     const hourLabel = fmtHM(snapped) + (snapped > nowT ? " (à venir)" : "");
 
     const cards = [
-      { label: dayName.charAt(0).toUpperCase() + dayName.slice(1), value: dateText,
-        note: hourLabel, cls: "tip-date",
+      { label: dayName.charAt(0).toUpperCase() + dayName.slice(1) + " · " + hourLabel,
+        value: dateText, cls: "tip-date",
         title: fmtDay(snapped) + " " + fmtHM(snapped) + (snapped > nowT ? " (à venir)" : "") },
       { label: "T° int.", value: inside === null ? "–" : num(inside) + " °C", cls: "tip-in" },
       { label: "Consigne", value: sp === null ? "–" : num(sp) + " °C", cls: "tip-sp" },
